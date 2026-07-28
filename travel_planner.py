@@ -1,0 +1,1 @@
+"""Gemini API와 Kakao Local API를 활용한 국내 여행 추천 프로그램."""

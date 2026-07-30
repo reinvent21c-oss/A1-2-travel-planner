@@ -193,7 +193,7 @@ reason: string
         if retry_count == 0:
             print("- JSON 파싱 실패로 Gemini에 1회 재요청합니다.")
 
-            return request_travel_recommendendation(
+            return request_travel_recommendation(
                 travel_date,
                 gemini_api_key,
                 retry_count=1,

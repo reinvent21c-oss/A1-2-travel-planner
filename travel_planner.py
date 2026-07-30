@@ -73,6 +73,43 @@ def load_api_keys():
 
     return gemini_api_key, kakao_api_key
 
+def validate_recommendation_data(data):
+    """Gemini 추천 JSON의 필수 키와 자료형을 검증한다."""
+    if not isinstance(data, dict):
+        raise ValueError(
+            "추천 응답의 최상위 값은 JSON 객체여야 합니다."
+        )
+
+    string_keys = (
+        "recommended_city",
+        "weather",
+        "reason",
+    )
+
+    for key in string_keys:
+        value = data.get(key)
+
+        if not isinstance(value, str) or not value.strip():
+            raise ValueError(
+                f"{key}는 비어 있지 않은 문자열이어야 합니다."
+            )
+
+    events = data.get("events")
+
+    if not isinstance(events, list) or not 1 <= len(events) <= 3:
+        raise ValueError(
+            "events는 1~3개의 문자열을 담은 배열이어야 합니다."
+        )
+
+    if not all(
+        isinstance(event, str) and event.strip()
+        for event in events
+    ):
+        raise ValueError(
+            "events의 각 항목은 비어 있지 않은 문자열이어야 합니다."
+        )
+
+    return data
 
 def request_travel_recommendation(
     travel_date,
@@ -179,7 +216,8 @@ reason: string
             response_data["candidates"][0]["content"]["parts"][0]["text"]
         )
 
-        return json.loads(response_text)
+        recommendation = json.loads(response_text)
+        return validate_recommendation_data(recommendation)
 
     except requests.RequestException as error:
         print(f"Gemini API 네트워크 오류: {error}")
@@ -189,9 +227,12 @@ reason: string
         print("Gemini 응답에서 생성 결과를 찾지 못했습니다.")
         raise SystemExit(1) from error
 
-    except json.JSONDecodeError as error:
+    except ValueError as error:
         if retry_count == 0:
-            print("- JSON 파싱 실패로 Gemini에 1회 재요청합니다.")
+            print(
+              "- JSON 파싱 또는 구조 검증 실패로 "
+               "Gemini에 1회 재요청합니다."
+            )       
 
             return request_travel_recommendation(
                 travel_date,
@@ -201,7 +242,7 @@ reason: string
 
         print(
             "Gemini 응답을 재요청했지만 "
-            "JSON으로 변환하지 못했습니다."
+            "올바른 추천 JSON을 받지 못했습니다."
         )
         raise SystemExit(1) from error
 

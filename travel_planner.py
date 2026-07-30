@@ -73,6 +73,7 @@ def load_api_keys():
 
     return gemini_api_key, kakao_api_key
 
+
 def validate_recommendation_data(data):
     """Gemini 추천 JSON의 필수 키와 자료형을 검증한다."""
     if not isinstance(data, dict):
@@ -111,6 +112,7 @@ def validate_recommendation_data(data):
 
     return data
 
+
 def request_travel_recommendation(
     travel_date,
     gemini_api_key,
@@ -128,7 +130,7 @@ def request_travel_recommendation(
 
     if retry_count == 1:
         prompt += """
-이전 응답은 JSON 파싱에 실패했습니다.
+이전 응답은 JSON 파싱 또는 구조 검증에 실패했습니다.
 설명, 인사말, Markdown 코드 블록은 제외하세요.
 다음 필수 키만 포함한 JSON 객체로 다시 출력하세요.
 
@@ -230,9 +232,9 @@ reason: string
     except ValueError as error:
         if retry_count == 0:
             print(
-              "- JSON 파싱 또는 구조 검증 실패로 "
-               "Gemini에 1회 재요청합니다."
-            )       
+                "- JSON 파싱 또는 구조 검증 실패로 "
+                "Gemini에 1회 재요청합니다."
+            )
 
             return request_travel_recommendation(
                 travel_date,
@@ -372,6 +374,91 @@ def search_restaurants(city, kakao_api_key, errors):
     return restaurants
 
 
+def build_fallback_report(
+    travel_date,
+    recommendation,
+    restaurants,
+    errors,
+):
+    """Gemini 최종 리포트 실패 시 로컬 Markdown을 생성한다."""
+    events = recommendation.get("events", [])
+
+    lines = [
+        f"# {travel_date} 국내 여행 추천 리포트",
+        "",
+        "## 추천 지역",
+        recommendation.get("recommended_city", "데이터 없음"),
+        "",
+        "## 추천 이유",
+        recommendation.get("reason", "데이터 없음"),
+        "",
+        "## 날씨 요약",
+        recommendation.get("weather", "데이터 없음"),
+        "",
+        "## 행사/축제",
+    ]
+
+    if events:
+        for event in events:
+            lines.append(f"- {event}")
+    else:
+        lines.append("데이터 없음")
+
+    lines.extend(
+        [
+            "",
+            "※ 행사·축제 일정은 변경될 수 있으므로 "
+            "방문 전에 확인이 필요합니다.",
+            "",
+            "## 맛집 추천",
+        ]
+    )
+
+    if restaurants:
+        for index, restaurant in enumerate(restaurants, start=1):
+            lines.extend(
+                [
+                    f"### {index}. "
+                    f"{restaurant.get('name', '이름 없음')}",
+                    f"- 주소: "
+                    f"{restaurant.get('address', '데이터 없음')}",
+                    f"- 분류: "
+                    f"{restaurant.get('category', '데이터 없음')}",
+                    f"- 링크: "
+                    f"{restaurant.get('url', '데이터 없음')}",
+                    "",
+                ]
+            )
+    else:
+        lines.extend(["데이터 없음", ""])
+
+    lines.extend(
+        [
+            "## 1일 일정 제안",
+            "- 오전: 데이터 없음",
+            "- 오후: 데이터 없음",
+            "- 저녁: 데이터 없음",
+            "",
+            "최종 리포트 생성 API 오류로 인해 "
+            "자동 일정 제안을 생성하지 못했습니다.",
+            "",
+            "## 오류 요약(errors)",
+        ]
+    )
+
+    if errors:
+        for error in errors:
+            lines.append(
+                f"- [{error.get('step', 'unknown')}/"
+                f"{error.get('type', 'UNKNOWN_ERROR')}] "
+                f"{error.get('message', '상세 메시지 없음')}"
+            )
+    else:
+        lines.append("오류 없음")
+
+    return "\n".join(lines)
+
+
 def generate_final_report(
     travel_date,
     recommendation,
@@ -448,26 +535,97 @@ def generate_final_report(
             try:
                 error_message = response.json()["error"]["message"]
             except (ValueError, KeyError, TypeError):
-                error_message = response.text or "상세 메시지 없음"
+                error_message = (
+                    response.text or "상세 메시지 없음"
+                )
 
-            print(f"최종 리포트 생성 오류: HTTP {response.status_code}")
+            if response.status_code in (401, 403):
+                error_type = "AUTH_ERROR"
+            elif response.status_code == 429:
+                error_type = "QUOTA_ERROR"
+            else:
+                error_type = "HTTP_ERROR"
+
+            errors.append(
+                {
+                    "step": "final_report",
+                    "type": error_type,
+                    "message": (
+                        f"HTTP {response.status_code}: "
+                        f"{error_message}"
+                    ),
+                }
+            )
+
+            print(
+                f"최종 리포트 생성 오류: "
+                f"HTTP {response.status_code}"
+            )
             print(f"- 상세: {error_message}")
-            raise SystemExit(1)
+            print("- 로컬 대체 리포트를 생성합니다.")
+
+            return build_fallback_report(
+                travel_date,
+                recommendation,
+                restaurants,
+                errors,
+            )
 
         response_data = response.json()
         report_text = (
             response_data["candidates"][0]["content"]["parts"][0]["text"]
         )
 
+        if (
+            not isinstance(report_text, str)
+            or not report_text.strip()
+        ):
+            raise ValueError(
+                "최종 리포트 내용이 비어 있습니다."
+            )
+
         return report_text.strip()
 
-    except requests.RequestException as error:
-        print(f"최종 리포트 생성 네트워크 오류: {error}")
-        raise SystemExit(1) from error
+    except (ValueError, KeyError, IndexError, TypeError) as error:
+        errors.append(
+            {
+                "step": "final_report",
+                "type": "RESPONSE_ERROR",
+                "message": str(error),
+            }
+        )
 
-    except (KeyError, IndexError, TypeError) as error:
-        print("Gemini 응답에서 최종 리포트를 찾지 못했습니다.")
-        raise SystemExit(1) from error
+        print(
+            "Gemini 응답에서 올바른 최종 리포트를 "
+            "찾지 못했습니다."
+        )
+        print("- 로컬 대체 리포트를 생성합니다.")
+
+        return build_fallback_report(
+            travel_date,
+            recommendation,
+            restaurants,
+            errors,
+        )
+
+    except requests.RequestException as error:
+        errors.append(
+            {
+                "step": "final_report",
+                "type": "NETWORK_ERROR",
+                "message": str(error),
+            }
+        )
+
+        print(f"최종 리포트 생성 네트워크 오류: {error}")
+        print("- 로컬 대체 리포트를 생성합니다.")
+
+        return build_fallback_report(
+            travel_date,
+            recommendation,
+            restaurants,
+            errors,
+        )
 
 
 def save_results(

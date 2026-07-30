@@ -15,6 +15,10 @@ GEMINI_API_URL = (
     f"models/{GEMINI_MODEL}:generateContent"
 )
 
+KAKAO_LOCAL_API_URL = (
+    "https://dapi.kakao.com/v2/local/search/keyword.json"
+)
+
 
 def validate_date(date_text):
     """입력값이 YYYY-MM-DD 형식의 실제 날짜인지 검증한다."""
@@ -173,10 +177,136 @@ def request_travel_recommendation(travel_date, gemini_api_key):
         raise SystemExit(1) from error
 
 
+def search_restaurants(city, kakao_api_key, errors):
+    """Kakao Local API에서 추천 지역의 맛집을 최대 5곳 검색한다."""
+    query = f"{city} 맛집"
+
+    headers = {
+        "Authorization": f"KakaoAK {kakao_api_key}",
+    }
+
+    params = {
+        "query": query,
+        "size": 5,
+    }
+
+    try:
+        response = requests.get(
+            KAKAO_LOCAL_API_URL,
+            headers=headers,
+            params=params,
+            timeout=10,
+        )
+
+        if response.status_code in (401, 403):
+            errors.append(
+                {
+                    "step": "place_search",
+                    "type": "AUTH_ERROR",
+                    "message": f"HTTP {response.status_code}",
+                }
+            )
+            print(
+                f"- 오류: 인증 실패({response.status_code}). "
+                "Kakao REST API 키와 사용 설정을 확인하세요."
+            )
+            return []
+
+        if response.status_code == 429:
+            errors.append(
+                {
+                    "step": "place_search",
+                    "type": "QUOTA_ERROR",
+                    "message": "HTTP 429",
+                }
+            )
+            print("- 오류: Kakao API 요청 한도를 초과했습니다.")
+            return []
+
+        if not response.ok:
+            errors.append(
+                {
+                    "step": "place_search",
+                    "type": "HTTP_ERROR",
+                    "message": f"HTTP {response.status_code}",
+                }
+            )
+            print(
+                f"- 오류: Kakao API 요청 실패 "
+                f"(HTTP {response.status_code})"
+            )
+            return []
+
+        response_data = response.json()
+
+    except requests.RequestException as error:
+        errors.append(
+            {
+                "step": "place_search",
+                "type": "NETWORK_ERROR",
+                "message": str(error),
+            }
+        )
+        print(f"- 오류: Kakao API 네트워크 오류: {error}")
+        return []
+
+    except ValueError as error:
+        errors.append(
+            {
+                "step": "place_search",
+                "type": "PARSE_ERROR",
+                "message": str(error),
+            }
+        )
+        print("- 오류: Kakao API 응답을 JSON으로 읽지 못했습니다.")
+        return []
+
+    documents = response_data.get("documents", [])
+
+    if not documents:
+        errors.append(
+            {
+                "step": "place_search",
+                "type": "EMPTY_RESULT",
+                "message": f"0 results for query={query}",
+            }
+        )
+        print("- 검색 결과 0건")
+        return []
+
+    restaurants = []
+
+    for place in documents[:5]:
+        try:
+            x = float(place["x"]) if place.get("x") else None
+            y = float(place["y"]) if place.get("y") else None
+        except (TypeError, ValueError):
+            x = None
+            y = None
+
+        restaurant = {
+            "name": place.get("place_name", "이름 없음"),
+            "address": (
+                place.get("road_address_name")
+                or place.get("address_name")
+                or "주소 없음"
+            ),
+            "category": place.get("category_name", ""),
+            "url": place.get("place_url", ""),
+            "x": x,
+            "y": y,
+        }
+
+        restaurants.append(restaurant)
+
+    return restaurants
+
+
 def main():
     """프로그램의 시작점."""
     args = parse_arguments()
-    gemini_api_key, _ = load_api_keys()
+    gemini_api_key, kakao_api_key = load_api_keys()
+    errors = []
 
     print(f"입력한 여행 날짜: {args.date}")
     print("[1/3] 1차 추천 생성 중(Gemini)...")
@@ -191,6 +321,27 @@ def main():
     print(f"- 날씨: {recommendation['weather']}")
     print(f"- 행사·축제: {', '.join(recommendation['events'])}")
     print(f"- 추천 이유: {recommendation['reason']}")
+
+    print("[2/3] 맛집 검색 중(Kakao Local)...")
+
+    restaurants = search_restaurants(
+        recommendation["recommended_city"],
+        kakao_api_key,
+        errors,
+    )
+
+    if restaurants:
+        print(f"- 맛집 {len(restaurants)}곳 검색 완료")
+
+        for index, restaurant in enumerate(restaurants, start=1):
+            print(
+                f"  {index}. {restaurant['name']} "
+                f"| {restaurant['address']}"
+            )
+    else:
+        print("- 맛집 데이터 없음")
+
+    print(f"- 현재 오류 기록: {len(errors)}건")
 
 
 if __name__ == "__main__":

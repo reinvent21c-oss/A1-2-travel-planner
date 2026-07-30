@@ -1,7 +1,10 @@
 """Gemini API와 Kakao Local API를 활용한 국내 여행 추천 프로그램."""
 
+import os
 from argparse import ArgumentParser, ArgumentTypeError
 from datetime import datetime
+
+from dotenv import load_dotenv
 
 
 def validate_date(date_text):
@@ -33,10 +36,37 @@ def parse_arguments():
     return parser.parse_args()
 
 
+def load_api_keys():
+    """환경변수에서 Gemini와 Kakao API 키를 불러오고 검증한다."""
+    load_dotenv()
+
+    gemini_api_key = os.getenv("GEMINI_API_KEY")
+    kakao_api_key = os.getenv("KAKAO_REST_API_KEY")
+
+    missing_keys = []
+
+    if not gemini_api_key or gemini_api_key == "YOUR_GEMINI_API_KEY":
+        missing_keys.append("GEMINI_API_KEY")
+
+    if not kakao_api_key or kakao_api_key == "YOUR_KAKAO_REST_API_KEY":
+        missing_keys.append("KAKAO_REST_API_KEY")
+
+    if missing_keys:
+        print("오류: 필요한 API 키가 설정되지 않았습니다.")
+        print(f"미설정 항목: {', '.join(missing_keys)}")
+        print(".env 파일에 실제 API 키를 입력한 뒤 다시 실행하세요.")
+        raise SystemExit(1)
+
+    return gemini_api_key, kakao_api_key
+
+
 def main():
     """프로그램의 시작점."""
     args = parse_arguments()
+    load_api_keys()
+
     print(f"입력한 여행 날짜: {args.date}")
+    print("API 키 설정 확인 완료")
 
 
 if __name__ == "__main__":

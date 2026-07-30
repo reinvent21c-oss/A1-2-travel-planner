@@ -1,10 +1,19 @@
 """Gemini API와 Kakao Local API를 활용한 국내 여행 추천 프로그램."""
 
+import json
 import os
 from argparse import ArgumentParser, ArgumentTypeError
 from datetime import datetime
 
+import requests
 from dotenv import load_dotenv
+
+
+GEMINI_MODEL = "gemini-3.5-flash-lite"
+GEMINI_API_URL = (
+    "https://generativelanguage.googleapis.com/v1beta/"
+    f"models/{GEMINI_MODEL}:generateContent"
+)
 
 
 def validate_date(date_text):
@@ -60,13 +69,128 @@ def load_api_keys():
     return gemini_api_key, kakao_api_key
 
 
+def request_travel_recommendation(travel_date, gemini_api_key):
+    """Gemini API에 여행 날짜를 전달하고 추천 JSON을 반환한다."""
+    prompt = f"""
+여행 날짜는 {travel_date}입니다.
+
+해당 시기에 여행하기 좋은 국내 지역 한 곳을 추천하세요.
+정확한 실시간 예보가 아니라 일반적인 계절 날씨를 요약하세요.
+행사와 축제는 일정이 변경될 수 있는 후보 1~3개를 제시하세요.
+추천 이유는 2~4문장으로 작성하세요.
+"""
+
+    headers = {
+        "Content-Type": "application/json",
+        "x-goog-api-key": gemini_api_key,
+    }
+
+    response_schema = {
+        "type": "object",
+        "properties": {
+            "recommended_city": {
+                "type": "string",
+                "description": "추천하는 대한민국 도시 또는 지역 한 곳",
+            },
+            "weather": {
+                "type": "string",
+                "description": "해당 시기의 일반적인 날씨 요약",
+            },
+            "events": {
+                "type": "array",
+                "description": "행사 또는 축제 후보 1~3개",
+                "items": {
+                    "type": "string",
+                },
+                "minItems": 1,
+                "maxItems": 3,
+            },
+            "reason": {
+                "type": "string",
+                "description": "여행지를 추천한 이유 2~4문장",
+            },
+        },
+        "required": [
+            "recommended_city",
+            "weather",
+            "events",
+            "reason",
+        ],
+        "additionalProperties": False,
+    }
+
+    payload = {
+        "contents": [
+            {
+                "parts": [
+                    {
+                        "text": prompt,
+                    }
+                ]
+            }
+        ],
+        "generationConfig": {
+            "responseMimeType": "application/json",
+            "responseJsonSchema": response_schema,
+        },
+    }
+
+    try:
+        response = requests.post(
+            GEMINI_API_URL,
+            headers=headers,
+            json=payload,
+            timeout=30,
+        )
+
+        if not response.ok:
+            try:
+                error_message = response.json()["error"]["message"]
+            except (ValueError, KeyError, TypeError):
+                error_message = response.text or "상세 메시지 없음"
+
+            print(f"Gemini API 요청 오류: HTTP {response.status_code}")
+            print(f"- 상세: {error_message}")
+            raise SystemExit(1)
+
+        response_data = response.json()
+        response_text = (
+            response_data["candidates"][0]["content"]["parts"][0]["text"]
+        )
+
+        return json.loads(response_text)
+
+    except requests.RequestException as error:
+        print(f"Gemini API 네트워크 오류: {error}")
+        raise SystemExit(1) from error
+
+    except (KeyError, IndexError, TypeError) as error:
+        print("Gemini 응답에서 생성 결과를 찾지 못했습니다.")
+        raise SystemExit(1) from error
+
+    except json.JSONDecodeError as error:
+        print("Gemini 응답을 JSON으로 변환하지 못했습니다.")
+        raise SystemExit(1) from error
+
+
 def main():
     """프로그램의 시작점."""
     args = parse_arguments()
-    load_api_keys()
+    gemini_api_key, _ = load_api_keys()
 
     print(f"입력한 여행 날짜: {args.date}")
-    print("API 키 설정 확인 완료")
+    print("[1/3] 1차 추천 생성 중(Gemini)...")
+
+    recommendation = request_travel_recommendation(
+        args.date,
+        gemini_api_key,
+    )
+
+    print("1차 추천 생성 완료")
+    print(f"- 추천 지역: {recommendation['recommended_city']}")
+    print(f"- 날씨: {recommendation['weather']}")
+    print(f"- 행사·축제: {', '.join(recommendation['events'])}")
+    print(f"- 추천 이유: {recommendation['reason']}")
 
 
 if __name__ == "__main__":

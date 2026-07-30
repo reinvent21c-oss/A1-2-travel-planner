@@ -74,7 +74,11 @@ def load_api_keys():
     return gemini_api_key, kakao_api_key
 
 
-def request_travel_recommendation(travel_date, gemini_api_key):
+def request_travel_recommendation(
+    travel_date,
+    gemini_api_key,
+    retry_count=0,
+):
     """Gemini API에 여행 날짜를 전달하고 추천 JSON을 반환한다."""
     prompt = f"""
 여행 날짜는 {travel_date}입니다.
@@ -83,6 +87,18 @@ def request_travel_recommendation(travel_date, gemini_api_key):
 정확한 실시간 예보가 아니라 일반적인 계절 날씨를 요약하세요.
 행사와 축제는 일정이 변경될 수 있는 후보 1~3개를 제시하세요.
 추천 이유는 2~4문장으로 작성하세요.
+"""
+
+    if retry_count == 1:
+        prompt += """
+이전 응답은 JSON 파싱에 실패했습니다.
+설명, 인사말, Markdown 코드 블록은 제외하세요.
+다음 필수 키만 포함한 JSON 객체로 다시 출력하세요.
+
+recommended_city: string
+weather: string
+events: array of string
+reason: string
 """
 
     headers = {
@@ -174,7 +190,19 @@ def request_travel_recommendation(travel_date, gemini_api_key):
         raise SystemExit(1) from error
 
     except json.JSONDecodeError as error:
-        print("Gemini 응답을 JSON으로 변환하지 못했습니다.")
+        if retry_count == 0:
+            print("- JSON 파싱 실패로 Gemini에 1회 재요청합니다.")
+
+            return request_travel_recommendendation(
+                travel_date,
+                gemini_api_key,
+                retry_count=1,
+            )
+
+        print(
+            "Gemini 응답을 재요청했지만 "
+            "JSON으로 변환하지 못했습니다."
+        )
         raise SystemExit(1) from error
 
 

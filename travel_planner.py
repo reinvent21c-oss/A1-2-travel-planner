@@ -4,6 +4,7 @@ import json
 import os
 from argparse import ArgumentParser, ArgumentTypeError
 from datetime import datetime
+from pathlib import Path
 
 import requests
 from dotenv import load_dotenv
@@ -302,6 +303,149 @@ def search_restaurants(city, kakao_api_key, errors):
     return restaurants
 
 
+def generate_final_report(
+    travel_date,
+    recommendation,
+    restaurants,
+    errors,
+    gemini_api_key,
+):
+    """추천 정보와 맛집 목록을 바탕으로 Markdown 리포트를 생성한다."""
+    report_data = {
+        "travel_date": travel_date,
+        "recommendation": recommendation,
+        "restaurants": restaurants,
+        "errors": errors,
+    }
+
+    report_data_text = json.dumps(
+        report_data,
+        ensure_ascii=False,
+        indent=2,
+    )
+
+    prompt = f"""
+아래 JSON 데이터를 바탕으로 국내 여행 추천 리포트를 작성하세요.
+
+{report_data_text}
+
+다음 조건을 모두 지켜야 합니다.
+
+1. 결과는 Markdown 형식으로만 작성하세요.
+2. Markdown 코드 블록 기호는 사용하지 마세요.
+3. 가장 위 제목은 다음 형식으로 작성하세요.
+   # {travel_date} 국내 여행 추천 리포트
+4. 다음 항목을 반드시 순서대로 포함하세요.
+   ## 추천 지역
+   ## 추천 이유
+   ## 날씨 요약
+   ## 행사/축제
+   ## 맛집 추천
+   ## 1일 일정 제안
+   ## 오류 요약(errors)
+5. 1일 일정은 오전, 오후, 저녁으로 나누어 작성하세요.
+6. 맛집 목록이 비어 있으면 '데이터 없음'이라고 작성하세요.
+7. 오류 목록이 비어 있으면 '오류 없음'이라고 작성하세요.
+8. 행사와 축제는 실제 일정이 변경될 수 있음을 안내하세요.
+9. 제공된 JSON에 없는 맛집 이름이나 주소는 새로 만들지 마세요.
+"""
+
+    headers = {
+        "Content-Type": "application/json",
+        "x-goog-api-key": gemini_api_key,
+    }
+
+    payload = {
+        "contents": [
+            {
+                "parts": [
+                    {
+                        "text": prompt,
+                    }
+                ]
+            }
+        ]
+    }
+
+    try:
+        response = requests.post(
+            GEMINI_API_URL,
+            headers=headers,
+            json=payload,
+            timeout=30,
+        )
+
+        if not response.ok:
+            try:
+                error_message = response.json()["error"]["message"]
+            except (ValueError, KeyError, TypeError):
+                error_message = response.text or "상세 메시지 없음"
+
+            print(f"최종 리포트 생성 오류: HTTP {response.status_code}")
+            print(f"- 상세: {error_message}")
+            raise SystemExit(1)
+
+        response_data = response.json()
+        report_text = (
+            response_data["candidates"][0]["content"]["parts"][0]["text"]
+        )
+
+        return report_text.strip()
+
+    except requests.RequestException as error:
+        print(f"최종 리포트 생성 네트워크 오류: {error}")
+        raise SystemExit(1) from error
+
+    except (KeyError, IndexError, TypeError) as error:
+        print("Gemini 응답에서 최종 리포트를 찾지 못했습니다.")
+        raise SystemExit(1) from error
+
+
+def save_results(
+    travel_date,
+    recommendation,
+    restaurants,
+    errors,
+    report_text,
+):
+    """원본 JSON과 최종 Markdown 리포트를 results 폴더에 저장한다."""
+    results_directory = Path("results")
+    results_directory.mkdir(exist_ok=True)
+
+    raw_data_path = (
+        results_directory / f"{travel_date}_raw_data.json"
+    )
+    report_path = (
+        results_directory / f"{travel_date}_travel_plan.md"
+    )
+
+    raw_data = {
+        "recommendation": recommendation,
+        "restaurants": restaurants,
+        "errors": errors,
+    }
+
+    with raw_data_path.open(
+        "w",
+        encoding="utf-8",
+    ) as json_file:
+        json.dump(
+            raw_data,
+            json_file,
+            ensure_ascii=False,
+            indent=2,
+        )
+
+    with report_path.open(
+        "w",
+        encoding="utf-8",
+    ) as markdown_file:
+        markdown_file.write(report_text)
+        markdown_file.write("\n")
+
+    return raw_data_path, report_path
+
+
 def main():
     """프로그램의 시작점."""
     args = parse_arguments()
@@ -341,7 +485,31 @@ def main():
     else:
         print("- 맛집 데이터 없음")
 
-    print(f"- 현재 오류 기록: {len(errors)}건")
+    print("[3/3] 최종 리포트 생성 중(Gemini)...")
+
+    report_text = generate_final_report(
+        args.date,
+        recommendation,
+        restaurants,
+        errors,
+        gemini_api_key,
+    )
+
+    print("- 최종 리포트 생성 완료")
+
+    raw_data_path, report_path = save_results(
+        args.date,
+        recommendation,
+        restaurants,
+        errors,
+        report_text,
+    )
+
+    print()
+    print("완료!")
+    print(f"- 원본 데이터: {raw_data_path}")
+    print(f"- 여행 리포트: {report_path}")
+    print(f"- 오류 기록: {len(errors)}건")
 
 
 if __name__ == "__main__":

@@ -75,40 +75,67 @@ def load_api_keys():
 
 
 def validate_recommendation_data(data):
-    """Gemini 추천 JSON의 필수 키와 자료형을 검증한다."""
+    """Gemini 복수 지역 추천 JSON의 필수 키와 자료형을 검증한다."""
     if not isinstance(data, dict):
         raise ValueError(
             "추천 응답의 최상위 값은 JSON 객체여야 합니다."
         )
 
-    string_keys = (
-        "recommended_city",
-        "weather",
-        "reason",
-    )
+    recommended_cities = data.get("recommended_cities")
 
-    for key in string_keys:
-        value = data.get(key)
-
-        if not isinstance(value, str) or not value.strip():
-            raise ValueError(
-                f"{key}는 비어 있지 않은 문자열이어야 합니다."
-            )
-
-    events = data.get("events")
-
-    if not isinstance(events, list) or not 1 <= len(events) <= 3:
-        raise ValueError(
-            "events는 1~3개의 문자열을 담은 배열이어야 합니다."
-        )
-
-    if not all(
-        isinstance(event, str) and event.strip()
-        for event in events
+    if (
+        not isinstance(recommended_cities, list)
+        or not 2 <= len(recommended_cities) <= 3
     ):
         raise ValueError(
-            "events의 각 항목은 비어 있지 않은 문자열이어야 합니다."
+            "recommended_cities는 2~3개 지역 객체를 담은 배열이어야 합니다."
         )
+
+    checked_city_names = set()
+
+    for index, recommendation in enumerate(
+        recommended_cities,
+        start=1,
+    ):
+        if not isinstance(recommendation, dict):
+            raise ValueError(
+                f"{index}번째 추천 지역은 JSON 객체여야 합니다."
+            )
+
+        for key in ("city", "weather", "reason"):
+            value = recommendation.get(key)
+
+            if not isinstance(value, str) or not value.strip():
+                raise ValueError(
+                    f"{index}번째 추천의 {key}는 "
+                    "비어 있지 않은 문자열이어야 합니다."
+                )
+
+        events = recommendation.get("events")
+
+        if not isinstance(events, list) or not 1 <= len(events) <= 3:
+            raise ValueError(
+                f"{index}번째 추천의 events는 "
+                "1~3개의 문자열을 담은 배열이어야 합니다."
+            )
+
+        if not all(
+            isinstance(event, str) and event.strip()
+            for event in events
+        ):
+            raise ValueError(
+                f"{index}번째 추천의 events 각 항목은 "
+                "비어 있지 않은 문자열이어야 합니다."
+            )
+
+        city_name = recommendation["city"].strip()
+
+        if city_name in checked_city_names:
+            raise ValueError(
+                f"추천 지역이 중복되었습니다: {city_name}"
+            )
+
+        checked_city_names.add(city_name)
 
     return data
 
@@ -122,10 +149,11 @@ def request_travel_recommendation(
     prompt = f"""
 여행 날짜는 {travel_date}입니다.
 
-해당 시기에 여행하기 좋은 국내 지역 한 곳을 추천하세요.
-정확한 실시간 예보가 아니라 일반적인 계절 날씨를 요약하세요.
-행사와 축제는 일정이 변경될 수 있는 후보 1~3개를 제시하세요.
-추천 이유는 2~4문장으로 작성하세요.
+해당 시기에 여행하기 좋은 서로 다른 국내 지역 2~3곳을 추천하세요.
+각 지역마다 정확한 실시간 예보가 아니라 일반적인 계절 날씨를 요약하세요.
+각 지역마다 행사와 축제 후보를 1~3개 제시하세요.
+각 지역의 추천 이유는 2~4문장으로 작성하세요.
+지역 이름이 중복되지 않도록 하세요.
 """
 
     if retry_count == 1:
@@ -134,9 +162,12 @@ def request_travel_recommendation(
 설명, 인사말, Markdown 코드 블록은 제외하세요.
 다음 필수 키만 포함한 JSON 객체로 다시 출력하세요.
 
-recommended_city: string
+recommended_cities: array of 2~3 objects
+
+각 객체의 필수 키:
+city: string
 weather: string
-events: array of string
+events: array of 1~3 strings
 reason: string
 """
 
@@ -148,33 +179,48 @@ reason: string
     response_schema = {
         "type": "object",
         "properties": {
-            "recommended_city": {
-                "type": "string",
-                "description": "추천하는 대한민국 도시 또는 지역 한 곳",
-            },
-            "weather": {
-                "type": "string",
-                "description": "해당 시기의 일반적인 날씨 요약",
-            },
-            "events": {
+            "recommended_cities": {
                 "type": "array",
-                "description": "행사 또는 축제 후보 1~3개",
-                "items": {
-                    "type": "string",
-                },
-                "minItems": 1,
+                "description": "여행하기 좋은 서로 다른 국내 지역 2~3곳",
+                "minItems": 2,
                 "maxItems": 3,
-            },
-            "reason": {
-                "type": "string",
-                "description": "여행지를 추천한 이유 2~4문장",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "city": {
+                            "type": "string",
+                            "description": "추천하는 대한민국 도시 또는 지역",
+                        },
+                        "weather": {
+                            "type": "string",
+                            "description": "해당 시기의 일반적인 날씨 요약",
+                        },
+                        "events": {
+                            "type": "array",
+                            "description": "행사 또는 축제 후보 1~3개",
+                            "items": {
+                                "type": "string",
+                            },
+                            "minItems": 1,
+                            "maxItems": 3,
+                        },
+                        "reason": {
+                            "type": "string",
+                            "description": "해당 지역을 추천한 이유 2~4문장",
+                        },
+                    },
+                    "required": [
+                        "city",
+                        "weather",
+                        "events",
+                        "reason",
+                    ],
+                    "additionalProperties": False,
+                },
             },
         },
         "required": [
-            "recommended_city",
-            "weather",
-            "events",
-            "reason",
+            "recommended_cities",
         ],
         "additionalProperties": False,
     }
@@ -376,68 +422,121 @@ def search_restaurants(city, kakao_api_key, errors):
 
 def build_fallback_report(
     travel_date,
-    recommendation,
-    restaurants,
+    recommendation_data,
+    restaurants_by_city,
     errors,
 ):
-    """Gemini 최종 리포트 실패 시 로컬 Markdown을 생성한다."""
-    events = recommendation.get("events", [])
+    """Gemini 최종 리포트 실패 시 복수 지역 Markdown을 생성한다."""
+    recommendations = recommendation_data.get(
+        "recommended_cities",
+        [],
+    )
+
+    restaurant_map = {
+        item.get("city"): item.get("restaurants", [])
+        for item in restaurants_by_city
+        if isinstance(item, dict)
+    }
 
     lines = [
         f"# {travel_date} 국내 여행 추천 리포트",
         "",
-        "## 추천 지역",
-        recommendation.get("recommended_city", "데이터 없음"),
-        "",
-        "## 추천 이유",
-        recommendation.get("reason", "데이터 없음"),
-        "",
-        "## 날씨 요약",
-        recommendation.get("weather", "데이터 없음"),
-        "",
-        "## 행사/축제",
+        "## 지역별 여행 추천",
     ]
 
-    if events:
-        for event in events:
-            lines.append(f"- {event}")
+    if recommendations:
+        for city_index, recommendation in enumerate(
+            recommendations,
+            start=1,
+        ):
+            city = recommendation.get(
+                "city",
+                "지역 정보 없음",
+            )
+            events = recommendation.get("events", [])
+            city_restaurants = restaurant_map.get(city, [])
+
+            lines.extend(
+                [
+                    "",
+                    f"### {city_index}. {city}",
+                    "",
+                    "#### 추천 이유",
+                    recommendation.get(
+                        "reason",
+                        "데이터 없음",
+                    ),
+                    "",
+                    "#### 날씨 요약",
+                    recommendation.get(
+                        "weather",
+                        "데이터 없음",
+                    ),
+                    "",
+                    "#### 행사/축제",
+                ]
+            )
+
+            if events:
+                for event in events:
+                    lines.append(f"- {event}")
+            else:
+                lines.append("데이터 없음")
+
+            lines.extend(
+                [
+                    "",
+                    "#### 맛집 추천",
+                ]
+            )
+
+            if city_restaurants:
+                for restaurant_index, restaurant in enumerate(
+                    city_restaurants,
+                    start=1,
+                ):
+                    lines.extend(
+                        [
+                            f"##### {restaurant_index}. "
+                            f"{restaurant.get('name', '이름 없음')}",
+                            f"- 주소: "
+                            f"{restaurant.get('address', '데이터 없음')}",
+                            f"- 분류: "
+                            f"{restaurant.get('category', '데이터 없음')}",
+                            f"- 링크: "
+                            f"{restaurant.get('url', '데이터 없음')}",
+                            "",
+                        ]
+                    )
+            else:
+                lines.extend(
+                    [
+                        "데이터 없음",
+                        "",
+                    ]
+                )
+
+            lines.extend(
+                [
+                    "#### 1일 일정 제안",
+                    "- 오전: 데이터 없음",
+                    "- 오후: 데이터 없음",
+                    "- 저녁: 데이터 없음",
+                ]
+            )
     else:
-        lines.append("데이터 없음")
+        lines.extend(
+            [
+                "",
+                "추천 지역 데이터 없음",
+            ]
+        )
 
     lines.extend(
         [
             "",
             "※ 행사·축제 일정은 변경될 수 있으므로 "
             "방문 전에 확인이 필요합니다.",
-            "",
-            "## 맛집 추천",
-        ]
-    )
-
-    if restaurants:
-        for index, restaurant in enumerate(restaurants, start=1):
-            lines.extend(
-                [
-                    f"### {index}. "
-                    f"{restaurant.get('name', '이름 없음')}",
-                    f"- 주소: "
-                    f"{restaurant.get('address', '데이터 없음')}",
-                    f"- 분류: "
-                    f"{restaurant.get('category', '데이터 없음')}",
-                    f"- 링크: "
-                    f"{restaurant.get('url', '데이터 없음')}",
-                    "",
-                ]
-            )
-    else:
-        lines.extend(["데이터 없음", ""])
-
-    lines.extend(
-        [
-            "## 1일 일정 제안",
-            "- 오전: 데이터 없음",
-            "- 오후: 데이터 없음",
-            "- 저녁: 데이터 없음",
             "",
             "최종 리포트 생성 API 오류로 인해 "
             "자동 일정 제안을 생성하지 못했습니다.",
@@ -461,16 +560,16 @@ def build_fallback_report(
 
 def generate_final_report(
     travel_date,
-    recommendation,
-    restaurants,
+    recommendation_data,
+    restaurants_by_city,
     errors,
     gemini_api_key,
 ):
-    """추천 정보와 맛집 목록을 바탕으로 Markdown 리포트를 생성한다."""
+    """복수 지역 추천과 지역별 맛집으로 Markdown 리포트를 생성한다."""
     report_data = {
         "travel_date": travel_date,
-        "recommendation": recommendation,
-        "restaurants": restaurants,
+        "recommendation_data": recommendation_data,
+        "restaurants_by_city": restaurants_by_city,
         "errors": errors,
     }
 
@@ -491,19 +590,25 @@ def generate_final_report(
 2. Markdown 코드 블록 기호는 사용하지 마세요.
 3. 가장 위 제목은 다음 형식으로 작성하세요.
    # {travel_date} 국내 여행 추천 리포트
-4. 다음 항목을 반드시 순서대로 포함하세요.
+4. 먼저 다음 제목 아래에 추천 지역 전체를 목록으로 정리하세요.
    ## 추천 지역
-   ## 추천 이유
-   ## 날씨 요약
-   ## 행사/축제
-   ## 맛집 추천
-   ## 1일 일정 제안
-   ## 오류 요약(errors)
-5. 1일 일정은 오전, 오후, 저녁으로 나누어 작성하세요.
-6. 맛집 목록이 비어 있으면 '데이터 없음'이라고 작성하세요.
-7. 오류 목록이 비어 있으면 '오류 없음'이라고 작성하세요.
-8. 행사와 축제는 실제 일정이 변경될 수 있음을 안내하세요.
-9. 제공된 JSON에 없는 맛집 이름이나 주소는 새로 만들지 마세요.
+5. 그다음 다음 제목을 작성하세요.
+   ## 지역별 상세 추천
+6. 각 추천 지역을 다음 형식으로 각각 구분하세요.
+   ### 1. 지역명
+   #### 추천 이유
+   #### 날씨 요약
+   #### 행사/축제
+   #### 맛집 추천
+   #### 1일 일정 제안
+7. 1일 일정은 각 지역마다 오전, 오후, 저녁으로 나누어 작성하세요.
+8. restaurants_by_city에서 지역명이 같은 맛집만 해당 지역에 작성하세요.
+9. 맛집 목록이 비어 있으면 '데이터 없음'이라고 작성하세요.
+10. 제공된 JSON에 없는 맛집 이름이나 주소는 새로 만들지 마세요.
+11. 행사와 축제는 실제 일정이 변경될 수 있음을 안내하세요.
+12. 마지막에 다음 제목을 작성하세요.
+    ## 오류 요약(errors)
+13. 오류 목록이 비어 있으면 '오류 없음'이라고 작성하세요.
 """
 
     headers = {
@@ -566,8 +671,8 @@ def generate_final_report(
 
             return build_fallback_report(
                 travel_date,
-                recommendation,
-                restaurants,
+                recommendation_data,
+                restaurants_by_city,
                 errors,
             )
 
@@ -603,8 +708,8 @@ def generate_final_report(
 
         return build_fallback_report(
             travel_date,
-            recommendation,
-            restaurants,
+            recommendation_data,
+            restaurants_by_city,
             errors,
         )
 
@@ -622,11 +727,10 @@ def generate_final_report(
 
         return build_fallback_report(
             travel_date,
-            recommendation,
-            restaurants,
+            recommendation_data,
+            restaurants_by_city,
             errors,
         )
-
 
 def save_results(
     travel_date,
@@ -680,44 +784,82 @@ def main():
     errors = []
 
     print(f"입력한 여행 날짜: {args.date}")
-    print("[1/3] 1차 추천 생성 중(Gemini)...")
+    print("[1/3] 복수 지역 추천 생성 중(Gemini)...")
 
-    recommendation = request_travel_recommendation(
+    recommendation_data = request_travel_recommendation(
         args.date,
         gemini_api_key,
     )
 
-    print("1차 추천 생성 완료")
-    print(f"- 추천 지역: {recommendation['recommended_city']}")
-    print(f"- 날씨: {recommendation['weather']}")
-    print(f"- 행사·축제: {', '.join(recommendation['events'])}")
-    print(f"- 추천 이유: {recommendation['reason']}")
+    recommendations = recommendation_data["recommended_cities"]
 
-    print("[2/3] 맛집 검색 중(Kakao Local)...")
-
-    restaurants = search_restaurants(
-        recommendation["recommended_city"],
-        kakao_api_key,
-        errors,
+    print(
+        f"1차 추천 생성 완료 "
+        f"- 총 {len(recommendations)}개 지역"
     )
 
-    if restaurants:
-        print(f"- 맛집 {len(restaurants)}곳 검색 완료")
+    for index, recommendation in enumerate(
+        recommendations,
+        start=1,
+    ):
+        print()
+        print(f"[추천 지역 {index}]")
+        print(f"- 지역: {recommendation['city']}")
+        print(f"- 날씨: {recommendation['weather']}")
+        print(
+            f"- 행사·축제: "
+            f"{', '.join(recommendation['events'])}"
+        )
+        print(f"- 추천 이유: {recommendation['reason']}")
 
-        for index, restaurant in enumerate(restaurants, start=1):
+    print()
+    print("[2/3] 지역별 맛집 검색 중(Kakao Local)...")
+
+    restaurants_by_city = []
+
+    for recommendation in recommendations:
+        city = recommendation["city"]
+
+        print()
+        print(f"- {city} 맛집 검색 중...")
+
+        city_restaurants = search_restaurants(
+            city,
+            kakao_api_key,
+            errors,
+        )
+
+        restaurants_by_city.append(
+            {
+                "city": city,
+                "restaurants": city_restaurants,
+            }
+        )
+
+        if city_restaurants:
             print(
-                f"  {index}. {restaurant['name']} "
-                f"| {restaurant['address']}"
+                f"- {city} 맛집 "
+                f"{len(city_restaurants)}곳 검색 완료"
             )
-    else:
-        print("- 맛집 데이터 없음")
 
+            for index, restaurant in enumerate(
+                city_restaurants,
+                start=1,
+            ):
+                print(
+                    f"  {index}. {restaurant['name']} "
+                    f"| {restaurant['address']}"
+                )
+        else:
+            print(f"- {city} 맛집 데이터 없음")
+
+    print()
     print("[3/3] 최종 리포트 생성 중(Gemini)...")
 
     report_text = generate_final_report(
         args.date,
-        recommendation,
-        restaurants,
+        recommendation_data,
+        restaurants_by_city,
         errors,
         gemini_api_key,
     )
@@ -726,8 +868,8 @@ def main():
 
     raw_data_path, report_path = save_results(
         args.date,
-        recommendation,
-        restaurants,
+        recommendation_data,
+        restaurants_by_city,
         errors,
         report_text,
     )
@@ -737,7 +879,6 @@ def main():
     print(f"- 원본 데이터: {raw_data_path}")
     print(f"- 여행 리포트: {report_path}")
     print(f"- 오류 기록: {len(errors)}건")
-
 
 if __name__ == "__main__":
     main()

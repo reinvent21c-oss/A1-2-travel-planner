@@ -2,29 +2,38 @@
 
 Google Gemini API와 Kakao Local API를 연동한 CLI 기반 국내 여행 추천 프로그램입니다.
 
-사용자가 여행 날짜를 입력하면 Gemini가 해당 시기에 여행하기 좋은 국내 지역을 추천합니다. 이후 추천 지역을 Kakao Local API에 전달해 맛집을 검색하고, 추천 정보와 맛집 데이터를 바탕으로 최종 Markdown 여행 리포트를 생성합니다.
+사용자가 여행 날짜를 입력하면 Gemini가 해당 시기에 여행하기 좋은 국내 지역 2~3곳을 추천합니다. 이후 각 추천 지역을 Kakao Local API에 차례로 전달해 지역별 맛집을 검색하고, 추천 정보와 맛집 데이터를 바탕으로 최종 Markdown 여행 리포트를 생성합니다.
+
+같은 날짜로 다시 실행할 때는 기존 원본 JSON을 캐시로 사용합니다. 기존 Markdown 결과가 있으면 함께 재사용하고, Markdown이 없으면 저장된 JSON 데이터로 로컬 대체 리포트를 다시 생성합니다. 이 과정에서는 Gemini와 Kakao API 호출을 건너뜁니다.
 
 ## 주요 기능
 
 1. `argparse`를 이용한 여행 날짜 입력
-2. `YYYY-MM-DD` 날짜 형식 검증
-3. Gemini API를 이용한 여행지 추천 JSON 생성
-4. 추천 지역을 활용한 Kakao Local 맛집 검색
-5. Gemini API를 이용한 최종 Markdown 리포트 생성
-6. 원본 JSON과 Markdown 결과 파일 저장
-7. API 키 누락, 네트워크, 인증, 파싱 오류 처리
-8. Gemini JSON 파싱 실패 시 최대 1회 재요청
+2. `YYYY-MM-DD` 날짜 형식과 실제 존재하는 날짜 검증
+3. Gemini API를 이용한 국내 여행지 2~3곳 추천
+4. `recommended_cities` JSON 배열의 필수 키와 자료형 검증
+5. 추천 지역을 반복 처리하여 Kakao Local 맛집 검색
+6. 각 지역별 맛집을 최대 5곳씩 정리
+7. 복수 지역 추천과 맛집 데이터를 이용한 최종 Markdown 리포트 생성
+8. 원본 JSON과 Markdown 결과 파일 저장
+9. 같은 날짜의 기존 결과가 있으면 API 호출을 생략하는 캐시 기능
+10. API 키 누락, 네트워크, 인증, 쿼터, 파싱, 검색 결과 0건 오류 처리
+11. Gemini 추천 JSON 파싱 또는 구조 검증 실패 시 최대 1회 재요청
+12. 최종 Gemini 리포트 생성 실패 시 로컬 대체 Markdown 생성
 
 ## 프로그램 실행 흐름
 
 ```text
 여행 날짜 입력
-→ Gemini 여행지 추천
-→ 추천 결과를 JSON으로 파싱
-→ recommended_city를 Kakao Local API에 전달
-→ 맛집 최대 5곳 검색
-→ Gemini 최종 Markdown 리포트 생성
-→ results/ 폴더에 JSON과 Markdown 저장
+→ 같은 날짜의 기존 원본 JSON 확인
+→ 유효한 캐시가 있으면 Gemini와 Kakao API 호출 생략
+→ 캐시가 없거나 사용할 수 없으면 Gemini가 국내 지역 2~3곳 추천
+→ recommended_cities JSON 배열 검증
+→ 각 추천 지역을 반복 처리
+→ 지역별로 Kakao Local 맛집 최대 5곳 검색
+→ 추천 지역과 지역별 맛집을 Gemini에 전달
+→ 지역별 상세 Markdown 여행 리포트 생성
+→ results/ 폴더에 원본 JSON과 Markdown 저장
 ```
 
 ## API 요청 방식과 구조화된 데이터
@@ -47,18 +56,31 @@ Gemini의 추천 결과를 자유로운 문장으로 받으면 추천 지역, �
 
 ```json
 {
-  "recommended_city": "강릉시",
-  "weather": "일반적인 계절 날씨 요약",
-  "events": [
-    "행사 또는 축제 후보"
-  ],
-  "reason": "추천 이유"
+  "recommended_cities": [
+    {
+      "city": "강릉시",
+      "weather": "일반적인 계절 날씨 요약",
+      "events": [
+        "행사 또는 축제 후보"
+      ],
+      "reason": "추천 이유"
+    },
+    {
+      "city": "부산광역시",
+      "weather": "일반적인 계절 날씨 요약",
+      "events": [
+        "행사 또는 축제 후보"
+      ],
+      "reason": "추천 이유"
+    }
+  ]
 }
 ```
 
 구조화된 JSON을 사용하면 다음과 같은 장점이 있습니다.
 
-- `recommended_city`를 Kakao Local API의 검색 입력으로 바로 전달할 수 있습니다.
+- `recommended_cities` 배열을 반복하면서 각 지역명을 Kakao Local API의 검색 입력으로 전달할 수 있습니다.
+- 지역명, 날씨, 행사, 추천 이유를 하나의 객체로 묶어 지역별 정보가 서로 섞이지 않게 관리할 수 있습니다.
 - 필수 키가 모두 있는지 검사할 수 있습니다.
 - 문자열과 배열 등 각 값의 자료형을 검증할 수 있습니다.
 - 잘못된 응답 형식을 발견하면 Gemini에 한 번 다시 요청할 수 있습니다.
@@ -83,8 +105,8 @@ Gemini의 추천 결과를 자유로운 문장으로 받으면 추천 지역, �
 A1-2-travel-planner/
 ├── results/
 │   ├── .gitkeep
-│   ├── 2026-08-15_raw_data.json
-│   └── 2026-08-15_travel_plan.md
+│   ├── YYYY-MM-DD_raw_data.json
+│   └── YYYY-MM-DD_travel_plan.md
 ├── .env.example
 ├── .gitignore
 ├── README.md
@@ -168,39 +190,139 @@ python travel_planner.py -date "2026-08-15"
 
 ## 실행 결과
 
-정상 실행되면 터미널에 진행 상태가 출력됩니다.
+### 캐시가 없는 새 날짜
+
+캐시가 없는 날짜로 실행하면 Gemini와 Kakao API를 호출합니다.
 
 ```text
-[1/3] 1차 추천 생성 중(Gemini)...
-[2/3] 맛집 검색 중(Kakao Local)...
+입력한 여행 날짜: 2026-08-25
+[1/3] 복수 지역 추천 생성 중(Gemini)...
+1차 추천 생성 완료 - 총 3개 지역
+
+[2/3] 지역별 맛집 검색 중(Kakao Local)...
+- 강릉 맛집 5곳 검색 완료
+- 제주도 맛집 5곳 검색 완료
+- 부산 맛집 5곳 검색 완료
+
 [3/3] 최종 리포트 생성 중(Gemini)...
+- 최종 리포트 생성 완료
 
 완료!
 ```
 
-`results/` 폴더에 다음 파일이 생성됩니다.
+### 같은 날짜 재실행
+
+같은 날짜의 원본 JSON이 이미 있으면 기존 결과를 캐시로 사용합니다.
 
 ```text
-results/2026-08-15_raw_data.json
-results/2026-08-15_travel_plan.md
+입력한 여행 날짜: 2026-08-24
+- 같은 날짜의 기존 결과를 발견했습니다.
+- Gemini와 Kakao API 호출을 건너뜁니다.
+
+완료! (캐시 사용)
+- 원본 데이터: results/2026-08-24_raw_data.json
+- 여행 리포트: results/2026-08-24_travel_plan.md
+- 오류 기록: 0건
 ```
 
-원본 JSON에는 다음 데이터가 포함됩니다.
+캐시가 사용되면 Gemini 여행지 추천, 지역별 Kakao 맛집 검색, Gemini 최종 리포트 생성 호출을 모두 생략합니다.
+
+`results/` 폴더에는 날짜별로 다음 두 파일이 저장됩니다.
+
+```text
+results/YYYY-MM-DD_raw_data.json
+results/YYYY-MM-DD_travel_plan.md
+```
+
+원본 JSON에는 복수 지역 추천, 지역별 맛집, 오류 목록이 포함됩니다.
 
 ```json
 {
-  "recommendation": {},
-  "restaurants": [],
+  "recommendation": {
+    "recommended_cities": [
+      {
+        "city": "강릉",
+        "weather": "일반적인 계절 날씨 요약",
+        "events": [
+          "행사 또는 축제 후보"
+        ],
+        "reason": "추천 이유"
+      },
+      {
+        "city": "부산",
+        "weather": "일반적인 계절 날씨 요약",
+        "events": [
+          "행사 또는 축제 후보"
+        ],
+        "reason": "추천 이유"
+      }
+    ]
+  },
+  "restaurants": [
+    {
+      "city": "강릉",
+      "restaurants": [
+        {
+          "name": "맛집명",
+          "address": "주소",
+          "category": "카테고리",
+          "url": "장소 URL",
+          "x": 0.0,
+          "y": 0.0
+        }
+      ]
+    },
+    {
+      "city": "부산",
+      "restaurants": [
+        {
+          "name": "맛집명",
+          "address": "주소",
+          "category": "카테고리",
+          "url": "장소 URL",
+          "x": 0.0,
+          "y": 0.0
+        }
+      ]
+    }
+  ],
   "errors": []
 }
 ```
 
+## 결과 캐싱 정책
+
+프로그램은 입력 날짜에 해당하는 다음 원본 JSON 파일이 있는지 먼저 확인합니다.
+
+```text
+results/YYYY-MM-DD_raw_data.json
+```
+
+캐시가 정상적으로 존재하면 다음 데이터를 불러옵니다.
+
+- 복수 지역 추천 정보
+- 지역별 맛집 목록
+- 기존 오류 목록
+- 기존 Markdown 여행 리포트(파일이 있는 경우)
+
+이 경우 외부 API 호출을 모두 생략하므로 실행 속도가 빨라지고 API 사용량을 줄일 수 있습니다.
+
+캐시 원본 JSON이 없거나 파일을 읽을 수 없거나 필수 데이터 구조가 잘못된 경우에는 캐시를 사용하지 않고 Gemini와 Kakao API를 다시 호출합니다.
+
+원본 JSON은 정상이나 Markdown 파일만 없는 경우에는 저장된 JSON 데이터를 이용해 로컬 대체 Markdown을 다시 생성합니다.
+
+현재 정책에서는 같은 날짜의 정상 캐시가 있으면 기존 결과를 우선 사용합니다. 새로운 추천 결과를 받고 싶다면 해당 날짜의 원본 JSON과 Markdown 파일을 삭제한 뒤 다시 실행해야 합니다.
+
+
 ## 오류 처리 원칙
 
-- API 키가 없으면 설정 방법을 안내하고 즉시 종료합니다.
-- Gemini JSON 파싱 실패 시 최대 1회만 다시 요청합니다.
-- Kakao Local API가 실패하거나 검색 결과가 0건이면 맛집 데이터를 빈 목록으로 처리합니다.
-- 맛집 검색에 실패해도 최종 여행 리포트 생성은 계속 진행합니다.
+- 유효한 캐시가 없고 API 키도 없으면 설정 방법을 안내하고 즉시 종료합니다.
+- Gemini 추천 JSON의 파싱 또는 구조 검증이 실패하면 최대 1회 다시 요청합니다.
+- 재요청 후에도 올바른 추천 JSON을 받지 못하면 프로그램을 종료합니다.
+- Kakao Local API가 실패하거나 검색 결과가 0건이면 해당 지역의 맛집 데이터를 빈 목록으로 처리합니다.
+- 일부 지역의 맛집 검색에 실패해도 나머지 지역 검색과 최종 여행 리포트 생성은 계속 진행합니다.
+- 최종 Gemini 리포트 생성이 실패하면 추천 정보와 맛집 데이터로 로컬 대체 Markdown을 생성합니다.
+- 캐시 JSON을 읽을 수 없거나 필수 데이터 구조가 잘못되면 캐시를 사용하지 않고 기존 API 실행 흐름으로 돌아갑니다.
 - 발생한 오류는 내부 `errors` 목록과 원본 JSON에 기록합니다.
 
 ## API 키 보안 주의사항

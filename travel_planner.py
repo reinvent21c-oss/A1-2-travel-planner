@@ -732,6 +732,90 @@ def generate_final_report(
             errors,
         )
 
+def load_cached_results(travel_date):
+    """같은 날짜의 기존 JSON과 Markdown 결과를 불러온다."""
+    results_directory = Path("results")
+
+    raw_data_path = (
+        results_directory / f"{travel_date}_raw_data.json"
+    )
+    report_path = (
+        results_directory / f"{travel_date}_travel_plan.md"
+    )
+
+    if not raw_data_path.exists():
+        return None
+
+    try:
+        with raw_data_path.open(
+            "r",
+            encoding="utf-8",
+        ) as json_file:
+            raw_data = json.load(json_file)
+
+    except (OSError, ValueError) as error:
+        print(f"- 캐시 원본 JSON을 읽지 못했습니다: {error}")
+        print("- 기존 캐시를 사용하지 않고 API를 다시 호출합니다.")
+        return None
+
+    if not isinstance(raw_data, dict):
+        print("- 캐시 원본 JSON의 최상위 구조가 올바르지 않습니다.")
+        print("- 기존 캐시를 사용하지 않고 API를 다시 호출합니다.")
+        return None
+
+    recommendation_data = raw_data.get("recommendation")
+    restaurants_by_city = raw_data.get("restaurants")
+    errors = raw_data.get("errors")
+
+    if (
+        not isinstance(recommendation_data, dict)
+        or not isinstance(restaurants_by_city, list)
+        or not isinstance(errors, list)
+    ):
+        print("- 캐시 원본 JSON의 필수 데이터 구조가 올바르지 않습니다.")
+        print("- 기존 캐시를 사용하지 않고 API를 다시 호출합니다.")
+        return None
+
+    report_text = ""
+
+    if report_path.exists():
+        try:
+            report_text = report_path.read_text(
+                encoding="utf-8",
+            ).strip()
+
+        except OSError as error:
+            print(f"- 기존 Markdown을 읽지 못했습니다: {error}")
+
+    if not report_text:
+        print("- 기존 Markdown이 없어 로컬 리포트를 재생성합니다.")
+
+        report_text = build_fallback_report(
+            travel_date,
+            recommendation_data,
+            restaurants_by_city,
+            errors,
+        )
+
+        try:
+            report_path.write_text(
+                report_text + "\n",
+                encoding="utf-8",
+            )
+
+        except OSError as error:
+            print(f"- 재생성한 Markdown 저장 실패: {error}")
+            return None
+
+    return {
+        "recommendation_data": recommendation_data,
+        "restaurants_by_city": restaurants_by_city,
+        "errors": errors,
+        "report_text": report_text,
+        "raw_data_path": raw_data_path,
+        "report_path": report_path,
+    }
+
 def save_results(
     travel_date,
     recommendation,
@@ -780,10 +864,34 @@ def save_results(
 def main():
     """프로그램의 시작점."""
     args = parse_arguments()
+
+    print(f"입력한 여행 날짜: {args.date}")
+
+    cached_results = load_cached_results(args.date)
+
+    if cached_results is not None:
+        print("- 같은 날짜의 기존 결과를 발견했습니다.")
+        print("- Gemini와 Kakao API 호출을 건너뜁니다.")
+
+        print()
+        print("완료! (캐시 사용)")
+        print(
+            f"- 원본 데이터: "
+            f"{cached_results['raw_data_path']}"
+        )
+        print(
+            f"- 여행 리포트: "
+            f"{cached_results['report_path']}"
+        )
+        print(
+            f"- 오류 기록: "
+            f"{len(cached_results['errors'])}건"
+        )
+        return
+
     gemini_api_key, kakao_api_key = load_api_keys()
     errors = []
 
-    print(f"입력한 여행 날짜: {args.date}")
     print("[1/3] 복수 지역 추천 생성 중(Gemini)...")
 
     recommendation_data = request_travel_recommendation(

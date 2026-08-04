@@ -22,13 +22,21 @@ KAKAO_LOCAL_API_URL = (
 
 
 def validate_date(date_text):
-    """입력값이 YYYY-MM-DD 형식의 실제 날짜인지 검증한다."""
+    """입력값이 실제 날짜이며 오늘보다 과거가 아닌지 검증한다."""
     try:
-        datetime.strptime(date_text, "%Y-%m-%d")
+        parsed_date = datetime.strptime(
+            date_text,
+            "%Y-%m-%d",
+        ).date()
     except ValueError as error:
         raise ArgumentTypeError(
             "날짜는 YYYY-MM-DD 형식의 실제 날짜여야 합니다."
         ) from error
+
+    if parsed_date < datetime.today().date():
+        raise ArgumentTypeError(
+            "오늘보다 이전 날짜는 입력할 수 없습니다."
+        )
 
     return date_text
 

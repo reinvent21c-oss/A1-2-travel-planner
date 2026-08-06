@@ -110,8 +110,16 @@ A1-2-travel-planner/
 ├── .env.example
 ├── .gitignore
 ├── README.md
+├── api_helpers.py       # 외부 API 응답·오류 공통 처리
+├── cli.py               # 명령행 인자와 날짜 검증
+├── config.py            # API·결과 경로 설정과 API 키 로딩
+├── planner.py           # 여행 계획 생성 흐름과 출력
+├── recommendations.py   # Gemini 여행지 추천 생성·검증
+├── reports.py           # 최종 및 대체 Markdown 리포트 생성
+├── restaurants.py       # Kakao Local 맛집 검색
 ├── requirements.txt
-└── travel_planner.py
+├── storage.py           # 캐시 조회와 결과 파일 저장
+└── travel_planner.py    # 프로그램 실행 진입점
 ```
 
 `.venv`와 실제 API 키가 들어 있는 `.env` 파일은 GitHub에 포함하지 않습니다.
